@@ -110,13 +110,17 @@ if (!filter_var($client, FILTER_VALIDATE_IP)) { $client = '0.0.0.0'; }
 $headers[] = 'X-Forwarded-For: ' . $client;
 $headers[] = 'X-Forwarded-Proto: https';
 $headers[] = 'X-OpenGym-Proxy: ' . $secret;
+// The real path travels in a header, and the request itself always goes to one fixed address on
+// the Node.js project. SiteGround's front end refuses some paths outright (anything ending in
+// /config, for one), and the app has routes like that; this keeps such filters out of the way.
+$headers[] = 'X-OpenGym-Path: ' . $rest;
 $headers[] = 'Expect:';            // no "100 Continue" round trip
 $headers[] = 'Accept-Encoding:';   // plain bytes back, so lengths and ranges stay exact
 
 /* ---------- forward ---------- */
 $ch = curl_init();
 curl_setopt_array($ch, [
-    CURLOPT_URL            => $node . $rest,
+    CURLOPT_URL            => $node . '/__opengym',
     CURLOPT_CUSTOMREQUEST  => $method,
     CURLOPT_HTTPHEADER     => $headers,
     CURLOPT_FOLLOWLOCATION => false,
