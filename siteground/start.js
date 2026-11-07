@@ -43,7 +43,7 @@ fs.mkdirSync(DATA, { recursive: true });
 // Every start appends a line to a file in DATA_DIR. After a redeploy, /__sg/status lists the
 // earlier starts if the folder survived, and only the latest one if it was wiped.
 const bootFile = path.join(DATA, 'siteground-starts.log');
-const BOOT = { at: new Date().toISOString(), id: crypto.randomBytes(4).toString('hex'), cwd: process.cwd() };
+const BOOT = { at: new Date().toISOString(), id: crypto.randomBytes(4).toString('hex') };
 try { fs.appendFileSync(bootFile, JSON.stringify(BOOT) + '\n'); } catch (e) { console.error('cannot write', bootFile, e.message); }
 
 await import('./api/server.js');
@@ -85,7 +85,8 @@ function proxyApi(req, res) {
   headers['x-forwarded-for'] = clientAddress(req);
   headers['x-real-ip'] = headers['x-forwarded-for'];
   delete headers['cf-connecting-ip'];      // only Cloudflare may set this, and it is not in front
-  headers.host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  headers.host = 'localhost';             // the API does not use it; never pass on a visitor's value
+  delete headers['x-forwarded-host'];
   const up = http.request({ host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers }, r => {
     res.writeHead(r.statusCode, r.statusMessage, r.rawHeaders.length ? rawPairs(r.rawHeaders) : r.headers);
     r.pipe(res);
@@ -172,23 +173,19 @@ function serveStatic(req, res, pathname) {
 function status(res) {
   let starts = [];
   try { starts = fs.readFileSync(bootFile, 'utf8').trim().split('\n').map(l => JSON.parse(l)); } catch {}
-  let dataFiles = [];
-  try { dataFiles = fs.readdirSync(DATA); } catch {}
+  // Counts and yes/no only: this page is reachable by anyone who can reach the website, so it
+  // names no folders and no files. SG_STATUS_DETAIL=1 adds the folder paths while setting up.
   const body = {
     ok: true,
-    thisStart: BOOT,
     startsRecorded: starts.length,
     dataSurvivedARestart: starts.length > 1,
-    starts: starts.slice(-10),
-    dataDir: DATA,
-    dataFiles,
-    home: os.homedir(),
-    cwd: process.cwd(),
-    node: process.version,
-    publicPort: PUBLIC_PORT,
-    appBuilt: fs.existsSync(path.join(PUBLIC, 'index.html')),
-    proxySecretSet: !!SECRET
+    lastStarts: starts.slice(-5).map(s => s.at),
+    profileStoreExists: fs.existsSync(path.join(DATA, 'db.json')),
+    appBuilt: fs.existsSync(path.join(PUBLIC, 'index.html'))
   };
+  if (/^(1|true|yes|on)$/i.test(process.env.SG_STATUS_DETAIL || '')) {
+    Object.assign(body, { dataDir: DATA, home: os.homedir(), cwd: process.cwd(), node: process.version, publicPort: PUBLIC_PORT });
+  }
   send(res, 200, JSON.stringify(body, null, 2), { 'Content-Type': 'application/json; charset=utf-8' });
 }
 
@@ -198,7 +195,7 @@ http.createServer((req, res) => {
   try { url = new URL(req.url, 'http://x'); } catch { return send(res, 400, 'bad request'); }
   // A tiny unguarded answer so SiteGround (or you) can see the process is up.
   if (url.pathname === '/__sg/ping') return send(res, 200, 'ok');
-  if (!SECRET) return send(res, 503, 'PROXY_SECRET is not set on the SiteGround Node.js project yet.');
+  if (SECRET.length < 32) return send(res, 503, 'Not set up yet: PROXY_SECRET (32+ characters) is missing.');
   if (!safeEqual(req.headers['x-opengym-proxy'] || '', SECRET)) {
     return send(res, 403, 'Open this app through its address on your website, not through this project address.');
   }

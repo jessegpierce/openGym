@@ -1,10 +1,15 @@
 # openGym pass-through: every request under this folder goes to index.php, which forwards it to
 # the openGym Node.js project. This file overrides WordPress's rules for this folder only.
 DirectoryIndex index.php
-Options -Indexes
+Options -Indexes -MultiViews
 
-<Files "config.php">
+# Nothing in this folder is served as a file. config.php (the secret) and any other file here can
+# never be read or run from the web; only index.php runs, and only through the rule below.
+<FilesMatch ".">
     Require all denied
+</FilesMatch>
+<Files "index.php">
+    Require all granted
 </Files>
 
 <IfModule mod_rewrite.c>
