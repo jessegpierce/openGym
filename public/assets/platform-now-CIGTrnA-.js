@@ -1,0 +1,1 @@
+function e(){try{let e=globalThis.Capacitor?.getPlatform?.();return e===`ios`||e===`android`?e:null}catch{return null}}export{e as t};
