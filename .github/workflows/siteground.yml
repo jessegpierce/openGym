@@ -35,6 +35,9 @@ jobs:
           APP_BUILD="sg-${GITHUB_SHA::7}" npm run build
 
       - name: Put the SiteGround folder together
+        env:
+          # The name on the home screen icon and the browser tab. Empty keeps "openGym".
+          APP_NAME: PierceStrong
         run: bash siteground/assemble.sh "$RUNNER_TEMP/deploy"
 
       - name: Push it to the siteground-deploy branch

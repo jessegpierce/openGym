@@ -21,6 +21,28 @@ cp -R "$ROOT/catalogue/media" "$OUT/public/exercise-media"
 
 cp "$ROOT/siteground/start.js" "$OUT/start.js"
 
+# Optional: the name on the home screen icon, in the browser tab and in the install prompt
+# (APP_NAME, set in the workflow). Only the <title>, the iOS home screen title and the manifest
+# are touched; the inline script in index.html stays byte-for-byte, as its CSP hash requires.
+if [ -n "${APP_NAME:-}" ]; then
+  node -e '
+    const fs = require("fs"), dir = process.argv[1], name = process.argv[2];
+    const esc = s => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const mf = dir + "/manifest.json";
+    const m = JSON.parse(fs.readFileSync(mf, "utf8"));
+    m.name = name; m.short_name = name;
+    fs.writeFileSync(mf, JSON.stringify(m, null, 2) + "\n");
+    const ix = dir + "/index.html";
+    let h = fs.readFileSync(ix, "utf8");
+    const before = h;
+    h = h.replace(/<title>[^<]*<\/title>/, "<title>" + esc(name) + "</title>")
+         .replace(/(<meta name="apple-mobile-web-app-title" content=")[^"]*(")/, "$1" + esc(name) + "$2");
+    if (h === before) { console.error("APP_NAME: index.html had no title to change"); process.exit(1); }
+    fs.writeFileSync(ix, h);
+    console.log("app name set to", name);
+  ' "$OUT/public" "$APP_NAME"
+fi
+
 # One package.json at the top that SiteGround starts with `npm start`. The API's own dependencies,
 # installed here so node finds them from api/server.js by walking up.
 node -e '
