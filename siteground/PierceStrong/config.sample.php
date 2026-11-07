@@ -7,5 +7,6 @@ return [
     'node_url' => 'https://REPLACE-WITH-YOUR-NODE-PROJECT-ADDRESS',
 
     // The same random string as PROXY_SECRET in the Node.js project's environment variables.
+    // At least 32 characters; index.php refuses to run with a shorter one.
     'secret'   => 'REPLACE-WITH-THE-SAME-SECRET',
 ];
