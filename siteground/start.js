@@ -3,7 +3,8 @@
  * SiteGround runs one Node process with no nginx of its own in front, so this file does the job
  * the `web` container does in the Docker setup:
  *   - serves the built app (public/) and the exercise media (public/exercise-media/)
- *   - forwards /api/* to the openGym API (api/server.js), which it starts on an internal port
+ *   - hands /api/* to the openGym API (api/server.js), loaded into this same process
+ *     (SiteGround lets a project open only one listening server; see below)
  *
  * The app is reached at https://<your-site>/<folder>/ through a small PHP file on that site
  * (siteground/PierceStrong/index.php), which passes every request here with a shared secret.
@@ -17,6 +18,7 @@
  *   ORIGIN, RP_ID, RP_NAME, FIRST_USER_ADMIN, INVITE_ONLY ...  passed to the openGym API as-is
  */
 import http from 'node:http';
+import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,11 +28,9 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(HERE, 'public');
 const PUBLIC_PORT = +(process.env.PORT || 3000);
-const API_PORT = +(process.env.OPENGYM_API_PORT || 3077);
 const SECRET = String(process.env.PROXY_SECRET || '');
 
 // The API reads its settings from the environment when it loads, so set them before importing.
-process.env.PORT = String(API_PORT);
 process.env.DATA_DIR = process.env.DATA_DIR || path.join(os.homedir(), 'opengym-data');
 // Only this wrapper can reach the API, and it sets X-Forwarded-For itself (below), so the API may
 // believe that header for its sign-in throttle.
@@ -46,7 +46,37 @@ const bootFile = path.join(DATA, 'siteground-starts.log');
 const BOOT = { at: new Date().toISOString(), id: crypto.randomBytes(4).toString('hex') };
 try { fs.appendFileSync(bootFile, JSON.stringify(BOOT) + '\n'); } catch (e) { console.error('cannot write', bootFile, e.message); }
 
-await import('./api/server.js');
+/* ---------- load the openGym API in this process, without letting it listen ---------- */
+// SiteGround allows a Node.js project exactly one listening server: its runtime takes over the
+// first listen() and refuses any other. So the API's own HTTP server never listens here; its
+// request handler is captured and called directly for /api requests. The API's admin socket
+// (used only by the `recover.js` command line tool, which has no shell to run from here) is kept
+// from listening for the same reason. Both factories are put back as soon as the API has loaded.
+let apiServer = null;
+const quiet = server => {
+  server.listen = function (...args) {
+    const cb = args.find(a => typeof a === 'function');
+    this.address = () => ({ address: 'in-process', family: 'none', port: PUBLIC_PORT });
+    if (cb) process.nextTick(cb);
+    return this;
+  };
+  return server;
+};
+const realHttpCreate = http.createServer;
+const realNetCreate = net.createServer;
+http.createServer = function (...args) {
+  const s = quiet(realHttpCreate.apply(this, args));
+  if (!apiServer) apiServer = s;
+  return s;
+};
+net.createServer = function (...args) { return quiet(realNetCreate.apply(this, args)); };
+try {
+  await import('./api/server.js');
+} finally {
+  http.createServer = realHttpCreate;
+  net.createServer = realNetCreate;
+}
+if (!apiServer) throw new Error('the openGym API did not create its server');
 
 /* ---------- helpers ---------- */
 const CSP = "default-src 'self'; script-src 'self' 'sha256-xUZtZS1nWJaAyUqA7ZKgkLhjdEisnY0MiRmax16aGFg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data:; connect-src 'self' https: http:; worker-src 'self'; manifest-src 'self'; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
@@ -78,35 +108,17 @@ function clientAddress(req) {
   return fwd || String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
 }
 
-/* ---------- /api → the openGym API ---------- */
-function proxyApi(req, res) {
-  const headers = { ...req.headers };
-  delete headers['x-opengym-proxy'];
-  headers['x-forwarded-for'] = clientAddress(req);
-  headers['x-real-ip'] = headers['x-forwarded-for'];
-  delete headers['cf-connecting-ip'];      // only Cloudflare may set this, and it is not in front
-  headers.host = 'localhost';             // the API does not use it; never pass on a visitor's value
-  delete headers['x-forwarded-host'];
-  const up = http.request({ host: '127.0.0.1', port: API_PORT, method: req.method, path: req.url, headers }, r => {
-    res.writeHead(r.statusCode, r.statusMessage, r.rawHeaders.length ? rawPairs(r.rawHeaders) : r.headers);
-    r.pipe(res);
-  });
-  up.setTimeout(30 * 60000);
-  up.on('error', e => {
-    console.error('api proxy:', e.message);
-    if (!res.headersSent) send(res, 502, 'The openGym API is not answering yet. Try again in a moment.');
-    else res.destroy();
-  });
-  req.pipe(up);
-}
-// Keeps repeated headers (two Set-Cookie lines) as separate lines.
-function rawPairs(raw) {
-  const out = [];
-  for (let i = 0; i < raw.length; i += 2) {
-    if (/^(connection|keep-alive|transfer-encoding)$/i.test(raw[i])) continue;
-    out.push([raw[i], raw[i + 1]]);
-  }
-  return out;
+/* ---------- /api → the openGym API, in this process ---------- */
+function toApi(req, res) {
+  const h = req.headers;
+  const client = clientAddress(req);
+  delete h['x-opengym-proxy'];             // the secret goes no further than this file
+  delete h['cf-connecting-ip'];            // only Cloudflare may set this, and it is not in front
+  delete h['x-forwarded-host'];
+  h['x-forwarded-for'] = client;
+  h['x-real-ip'] = client;
+  h.host = 'localhost';                    // the API does not use it; never pass on a visitor's value
+  apiServer.emit('request', req, res);
 }
 
 /* ---------- the built app and the exercise media ---------- */
@@ -190,7 +202,7 @@ function status(res) {
 }
 
 /* ---------- the server SiteGround talks to ---------- */
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   let url;
   try { url = new URL(req.url, 'http://x'); } catch { return send(res, 400, 'bad request'); }
   // A tiny unguarded answer so SiteGround (or you) can see the process is up.
@@ -200,8 +212,13 @@ http.createServer((req, res) => {
     return send(res, 403, 'Open this app through its address on your website, not through this project address.');
   }
   if (url.pathname === '/__sg/status') return status(res);
-  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return proxyApi(req, res);
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return toApi(req, res);
   serveStatic(req, res, url.pathname);
-}).listen(PUBLIC_PORT, () => {
-  console.log(`openGym for SiteGround on :${PUBLIC_PORT} (api on :${API_PORT}, data in ${DATA})`);
+});
+// The API's own limits, now that this server is the one its requests arrive on: long enough for a
+// 40 MB video upload on a slow phone connection, short for a client that never sends its headers.
+server.requestTimeout = 30 * 60000;
+server.headersTimeout = 60000;
+server.listen(PUBLIC_PORT, () => {
+  console.log(`openGym for SiteGround on :${PUBLIC_PORT} (data in ${DATA})`);
 });
