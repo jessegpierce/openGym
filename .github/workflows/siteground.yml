@@ -1,0 +1,48 @@
+# Builds openGym for a SiteGround Node.js project and pushes it, ready to run, to the
+# `siteground-deploy` branch. The SiteGround project deploys from that branch, so every change to
+# main (including "Sync fork" from the original repository) reaches the site on its own.
+# Setup: siteground/README.md
+name: SiteGround build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: siteground-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Only in a fork that carries the siteground/ folder; never in the original repository.
+    if: github.repository != 'DuarteSantos8/openGym'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the app
+        working-directory: frontend
+        run: |
+          npm ci --ignore-scripts
+          APP_BUILD="sg-${GITHUB_SHA::7}" npm run build
+
+      - name: Put the SiteGround folder together
+        run: bash siteground/assemble.sh "$RUNNER_TEMP/deploy"
+
+      - name: Push it to the siteground-deploy branch
+        working-directory: ${{ runner.temp }}/deploy
+        run: |
+          git init -q -b siteground-deploy
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "SiteGround build of ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" siteground-deploy

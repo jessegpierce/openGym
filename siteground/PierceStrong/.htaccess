@@ -1,0 +1,14 @@
+# openGym pass-through: every request under this folder goes to index.php, which forwards it to
+# the openGym Node.js project. This file overrides WordPress's rules for this folder only.
+DirectoryIndex index.php
+Options -Indexes
+
+<Files "config.php">
+    Require all denied
+</Files>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^index\.php$ - [L]
+    RewriteRule ^ index.php [L,QSA]
+</IfModule>
