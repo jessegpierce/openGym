@@ -211,15 +211,16 @@ const server = http.createServer((req, res) => {
   if (!safeEqual(req.headers['x-opengym-proxy'] || '', SECRET)) {
     return send(res, 403, 'Open this app through its address on your website, not through this project address.');
   }
-  // The PHP pass-through sends every request to /__opengym with the real path in a header, so
+  // The PHP pass-through sends each request to /__opengym/<the real path, base64url-encoded>, so
   // SiteGround's front end never filters the app's own paths (it refuses anything ending in
-  // /config, for one). Only trusted once the secret has matched, above.
-  if (url.pathname === '/__opengym') {
-    const real = String(req.headers['x-opengym-path'] || '');
-    if (!real.startsWith('/') || real.startsWith('//') || real.length > 4096 || /[\x00-\x20\x7f\\]/.test(real)) {
+  // /config, for one), while every path keeps an address of its own for SiteGround's cache.
+  // Only trusted once the secret has matched, above.
+  const enc = /^\/__opengym\/([A-Za-z0-9_-]{1,6000})$/.exec(url.pathname);
+  if (enc) {
+    const real = Buffer.from(enc[1], 'base64url').toString('utf8');
+    if (!real.startsWith('/') || real.startsWith('//') || real.length > 4096 || /[\x00-\x20\x7f\\�]/.test(real)) {
       return send(res, 400, 'bad request');
     }
-    delete req.headers['x-opengym-path'];
     req.url = real;
     try { url = new URL(req.url, 'http://x'); } catch { return send(res, 400, 'bad request'); }
   }
