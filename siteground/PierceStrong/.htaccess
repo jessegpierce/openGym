@@ -3,14 +3,16 @@
 DirectoryIndex index.php
 Options -Indexes -MultiViews
 
-# Nothing in this folder is served as a file. config.php (the secret) and any other file here can
-# never be read or run from the web; only index.php runs, and only through the rule below.
-<FilesMatch ".">
+# config.php (the secret) and any other PHP, config, backup or log file here can never be read or
+# run from the web, even if it is added later; only index.php runs. Apache checks these names
+# before the rewrite below, so the app's own paths (assets/..., api/...) are not affected: they
+# are not files here and go to index.php, which only ever asks the Node.js project for them.
+<FilesMatch "^(?!index\.php$).*\.(php\d?|phtml|phar|phps|inc|ini|env|bak|old|orig|save|swp|sample|dist|log|sql|sh|zip|tar|gz)$">
     Require all denied
 </FilesMatch>
-<Files "index.php">
-    Require all granted
-</Files>
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
